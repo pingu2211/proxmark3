@@ -128,15 +128,22 @@ void gallagher_encode_creds(uint8_t *eight_bytes, GallagherCredentials_t *creds)
 }
 
 int gallagher_encode_mes(uint8_t *sixteen_bytes, GallagherCredentials_t *creds) {
+    // unknown parramters from the research these might be for UUID's longer than 4 bytes?
     uint8_t UB = 0x00;
     uint8_t UC = 0x00;
     uint8_t UD = 0x00;
     uint8_t UE = 0x00;
-    uint8_t PO = 0x00;
+    uint8_t PO = 0x00; // Pin offset
     uint8_t UX = 0x00;
     uint16_t R = 0x0748;
+
     uint8_t mes[16];
     uint8_t deversified_site_key[16];
+
+    if (creds->csn_len > 4){
+        PrintAndLogEx(ERR, "Credential could not be encoded into a Mifare Enhanced Encription block. only 4 byte UUID's are supported");
+        return PM3_ENOTIMPL;
+    }
 
     mes[0] = 0x01;
     mes[1] = (creds->card_number & 0xFF0000) >> 16;
@@ -170,8 +177,8 @@ int gallagher_encode_mes(uint8_t *sixteen_bytes, GallagherCredentials_t *creds) 
 }
 
 int gallagher_decode_mes(uint8_t *block, GallagherCredentials_t *creds) {
-    // unknown parramters from the research
-    // uint8_t UB = 0x00;
+    // unknown parramters from the research these might be for UUID's longer than 4 bytes?
+    // uint8_t UB = 0x00; 
     // uint8_t UC = 0x00;
     // uint8_t UD = 0x00;
     // uint8_t UE = 0x00;
@@ -182,7 +189,10 @@ int gallagher_decode_mes(uint8_t *block, GallagherCredentials_t *creds) {
 
     uint8_t deversified_site_key[16];
     gallagher_deversify_classic_key(creds->site_key, creds->csn, creds->csn_len, deversified_site_key);
-
+    if (creds->csn_len>4){
+        PrintAndLogEx(WARNING, "UUID length is > 4, this may not be a valid gallagher credential?");
+    }
+    
     // AES decrypt 16 bytes
     mbedtls_aes_context actx;
     mbedtls_aes_init(&actx);
@@ -215,6 +225,7 @@ int gallagher_decode_mes(uint8_t *block, GallagherCredentials_t *creds) {
     if (R != 0x0748) {
         PrintAndLogEx(WARNING, "R value is different from 0x0748, this hasn' seen in the wild \n https://github.com/megabug/gallagher-research/blob/master/formats/mes.md");
     }
+
     return PM3_SUCCESS;
 }
 

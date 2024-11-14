@@ -21,7 +21,9 @@
 #include "generator.h"
 #include "mifare.h"
 #include "mifare/desfirecore.h"
+#include "mifare/mifarehost.h"
 #include "mifare/gallaghercore.h"
+#include "mifare/gallaghertest.h"
 #include <stdio.h>
 #include <string.h>
 #include "common.h"
@@ -33,7 +35,8 @@
 static int CmdHelp(const char *cmd);
 
 // Application ID for the Gallagher Card Application Directory
-static const uint32_t CAD_AID = 0x2F81F4;
+static const uint32_t DESFIRE_CAD_AID = 0x2F81F4;
+static const uint32_t CLASSIC_CAD_AID = 0x4811;
 
 // Default MIFARE site key (16 bytes)
 static const uint8_t DEFAULT_SITE_KEY[] = {
@@ -53,8 +56,8 @@ static const uint8_t DEFAULT_SITE_KEY[] = {
  * @param key_output Buffer to copy the diversified key into (must be 16 bytes).
  * @return PM3_SUCCESS if successful, PM3_EINVARG if an argument is invalid.
  */
-int hfgal_diversify_key(uint8_t *site_key, uint8_t *uid, uint8_t uid_len,
-                        uint8_t key_num, uint32_t aid, uint8_t *key_output) {
+int hfgal_diversify_desfire_key(uint8_t *site_key, uint8_t *uid, uint8_t uid_len,
+                                uint8_t key_num, uint32_t aid, uint8_t *key_output) {
     // Generate diversification input
     uint8_t kdf_input_len = 11;
     int res = mfdes_kdf_input_gallagher(uid, uid_len, key_num, aid, key_output, &kdf_input_len);
@@ -62,7 +65,7 @@ int hfgal_diversify_key(uint8_t *site_key, uint8_t *uid, uint8_t uid_len,
 
     uint8_t key[sizeof(DEFAULT_SITE_KEY)];
     if (site_key == NULL) {
-        PrintAndLogEx(INFO, "hfgal_diversify_key is using default site key");
+        PrintAndLogEx(INFO, "hfgal_diversify_desfire_key is using default site key");
         memcpy(key, DEFAULT_SITE_KEY, sizeof(key));
     } else {
         memcpy(key, site_key, sizeof(key));
@@ -117,7 +120,7 @@ static void cad_aid_uint_to_byte(uint32_t aid, uint8_t *data) {
  */
 static bool cad_facility_match(const uint8_t *entry, uint8_t region_code, uint16_t facility_code) {
     return (entry[0] == region_code) &&
-           ((entry[1] << 8) + entry[2] == facility_code);
+    ((entry[1] << 8) + entry[2] == facility_code);
 }
 
 /**
@@ -219,7 +222,7 @@ static bool aid_exists(DesfireContext_t *ctx, uint32_t aid, bool verbose) {
     if (verbose) {
         PrintAndLogEx(INFO, "AID %06X %s",
                       aid,
-                      res == PM3_SUCCESS ? "exists" : "does not exist"
+        res == PM3_SUCCESS ? "exists" : "does not exist"
                      );
     }
 
@@ -261,7 +264,7 @@ static uint32_t find_available_gallagher_aid(DesfireContext_t *ctx, bool verbose
     for (uint8_t aid_increment = 0x20; aid_increment < 0xFF; aid_increment++) {
 
         uint32_t aid = 0x0081F4 | (aid_increment << 16);
-        if (aid == CAD_AID) {
+        if (aid == DESFIRE_CAD_AID) {
             continue;
         }
 
@@ -373,7 +376,7 @@ static int hfgal_create_creds_app(DesfireContext_t *ctx, uint8_t *site_key, uint
     // UID is required for key diversification
     if (ctx->uidlen == 0) {
         PM3_RET_ERR(PM3_EINVARG, "UID is required for key diversification. "
-                    "Please fetch it before calling `hfgal_create_creds_app`");
+                                 "Please fetch it before calling `hfgal_create_creds_app`");
     }
 
     // Create application
@@ -403,7 +406,7 @@ static int hfgal_create_creds_app(DesfireContext_t *ctx, uint8_t *site_key, uint
     for (int i = 2; i >= 0; i -= 2) {
         // Diversify key
         uint8_t buf[CRYPTO_AES128_KEY_SIZE] = {0};
-        res = hfgal_diversify_key(site_key, ctx->uid, ctx->uidlen, i, aid, buf);
+        res = hfgal_diversify_desfire_key(site_key, ctx->uid, ctx->uidlen, i, aid, buf);
         PM3_RET_IF_ERR_WITH_MSG(res, "Failed diversifying key %d for AID %06X", i, aid);
 
         PrintAndLogEx(INFO, "Diversified key %d for AID %06X: " _GREEN_("%s"),
@@ -491,10 +494,10 @@ static int hfgal_create_creds_file(DesfireContext_t *ctx, uint8_t *site_key, uin
  * @param dest_buf_len Size of dest_buf. Must be at least 108 bytes.
  * @param num_entries Will be set to the number of entries in the CAD.
  */
-static int hfgal_read_cad(DesfireContext_t *ctx, uint8_t *dest_buf,
-                          uint8_t dest_buf_len, uint8_t *num_entries_out, bool verbose) {
+static int hfgal_read_desfire_cad(DesfireContext_t *ctx, uint8_t *dest_buf,
+                                  uint8_t dest_buf_len, uint8_t *num_entries_out, bool verbose) {
     if (dest_buf_len < 3 * 36) {
-        PrintAndLogEx(ERR, "hfgal_read_cad destination buffer is incorrectly sized. Received len %d, must be at least %d",
+        PrintAndLogEx(ERR, "hfgal_read_desfire_cad destination buffer is incorrectly sized. Received len %d, must be at least %d",
                       dest_buf_len,
                       3 * 36
                      );
@@ -502,15 +505,15 @@ static int hfgal_read_cad(DesfireContext_t *ctx, uint8_t *dest_buf,
     }
 
     // Get card AIDs from Card Application Directory (which contains 1 to 3 files)
-    int res = select_aid(ctx, CAD_AID, verbose);
-    PM3_RET_IF_ERR_WITH_MSG(res, "Failed selecting Card Application Directory, does AID %06X exist?", CAD_AID);
+    int res = select_aid(ctx, DESFIRE_CAD_AID, verbose);
+    PM3_RET_IF_ERR_WITH_MSG(res, "Failed selecting Card Application Directory, does AID %06X exist?", DESFIRE_CAD_AID);
 
     // Read up to 3 files with 6x 6-byte entries each
     for (uint8_t i = 0; i < 3; i++) {
         size_t read_len;
         res = DesfireReadFile(ctx, i, 0, 36, &dest_buf[i * 36], &read_len);
         if (res != PM3_SUCCESS && res != PM3_EAPDU_FAIL) {
-            PM3_RET_ERR(res, "Failed reading file %d in Card Application Directory (AID %06X)", i, CAD_AID);
+            PM3_RET_ERR(res, "Failed reading file %d in Card Application Directory (AID %06X)", i, DESFIRE_CAD_AID);
         }
 
         // end if the last entry is NULL
@@ -553,8 +556,8 @@ static int hfgal_read_cad(DesfireContext_t *ctx, uint8_t *dest_buf,
  * @param key MIFARE site key, or custom CAD key.
  * @param should_diversify True if using a site_key, false if using a custom CAD key.
  */
-static int hfgal_create_cad(DesfireContext_t *ctx, uint8_t *key,
-                            bool should_diversify, bool verbose) {
+static int hfgal_create_desfire_cad(DesfireContext_t *ctx, uint8_t *key,
+                                    bool should_diversify, bool verbose) {
     // Check that card UID has been set
     if (ctx->uidlen == 0) {
         PM3_RET_ERR(PM3_EINVARG, "Card UID must be set in DesfireContext (required for key div)");
@@ -571,39 +574,39 @@ static int hfgal_create_cad(DesfireContext_t *ctx, uint8_t *key,
     uint8_t ks2 = (DesfireKeyAlgoToType(app_algo) << 6) | num_keys;;
 
     uint8_t data[5] = {0};
-    DesfireAIDUintToByte(CAD_AID, &data[0]);
+    DesfireAIDUintToByte(DESFIRE_CAD_AID, &data[0]);
     data[3] = ks1;
     data[4] = ks2;
 
     DesfireSetCommMode(ctx, DCMMACed);
     res = DesfireCreateApplication(ctx, data, ARRAYLEN(data));
-    PM3_RET_IF_ERR_WITH_MSG(res, "Failed creating Card Application Directory (AID " _YELLOW_("%06X")"). Does it already exist?", CAD_AID);
+    PM3_RET_IF_ERR_WITH_MSG(res, "Failed creating Card Application Directory (AID " _YELLOW_("%06X")"). Does it already exist?", DESFIRE_CAD_AID);
 
     if (verbose) {
         PrintAndLogEx(INFO, "Created Card Application Directory (AID " _YELLOW_("%06X") ", empty contents & blank keys)",
-                      CAD_AID
+                      DESFIRE_CAD_AID
                      );
     }
 
     // Select application & authenticate
     uint8_t blank_key[DESFIRE_MAX_KEY_SIZE] = {0};
-    res = select_aid_and_auth_with_key(ctx, CAD_AID, blank_key, 0, false, verbose);
+    res = select_aid_and_auth_with_key(ctx, DESFIRE_CAD_AID, blank_key, 0, false, verbose);
     PM3_RET_IF_ERR(res);
 
     uint8_t buf[CRYPTO_AES128_KEY_SIZE] = {0};
     if (should_diversify) {
         // Diversify key
-        res = hfgal_diversify_key(key, ctx->uid, ctx->uidlen, 0, CAD_AID, buf);
-        PM3_RET_IF_ERR_WITH_MSG(res, "Failed diversifying key 0 for AID %06X", CAD_AID);
+        res = hfgal_diversify_desfire_key(key, ctx->uid, ctx->uidlen, 0, DESFIRE_CAD_AID, buf);
+        PM3_RET_IF_ERR_WITH_MSG(res, "Failed diversifying key 0 for AID %06X", DESFIRE_CAD_AID);
 
         PrintAndLogEx(INFO, "Diversified key " _YELLOW_("0") " for CAD (AID " _YELLOW_("%06X") "): " _GREEN_("%s"),
-                      CAD_AID,
+                      DESFIRE_CAD_AID,
                       sprint_hex_inrow(buf, ARRAYLEN(buf))
                      );
         key = buf;
     } else if (verbose) {
         PrintAndLogEx(INFO, "Using provided key " _YELLOW_("0") " for CAD (AID " _YELLOW_("%06X") "): " _GREEN_("%s"),
-                      CAD_AID,
+                      DESFIRE_CAD_AID,
                       sprint_hex_inrow(key, CRYPTO_AES128_KEY_SIZE)
                      );
     }
@@ -617,7 +620,7 @@ static int hfgal_create_cad(DesfireContext_t *ctx, uint8_t *key,
         PrintAndLogEx(INFO, "Successfully set key " _YELLOW_("0") " for CAD");
     }
 
-    PrintAndLogEx(INFO, "Successfully created Card Application Directory (AID " _YELLOW_("%06X") ")", CAD_AID);
+    PrintAndLogEx(INFO, "Successfully created Card Application Directory (AID " _YELLOW_("%06X") ")", DESFIRE_CAD_AID);
     return PM3_SUCCESS;
 }
 
@@ -634,12 +637,12 @@ static int hfgal_add_aid_to_cad(DesfireContext_t *ctx, uint8_t *key, bool should
     // Check if CAD exists
     uint8_t cad[36 * 3] = {0};
     uint8_t num_entries = 0;
-    if (aid_exists(ctx, CAD_AID, false)) {
+    if (aid_exists(ctx, DESFIRE_CAD_AID, false)) {
         if (verbose) {
             PrintAndLogEx(INFO, "Card Application Directory exists, reading entries...");
         }
 
-        int res = hfgal_read_cad(ctx, cad, ARRAYLEN(cad), &num_entries, verbose);
+        int res = hfgal_read_desfire_cad(ctx, cad, ARRAYLEN(cad), &num_entries, verbose);
         PM3_RET_IF_ERR(res);
 
         // Check that there is space for the new entry
@@ -653,7 +656,7 @@ static int hfgal_add_aid_to_cad(DesfireContext_t *ctx, uint8_t *key, bool should
             PrintAndLogEx(INFO, "Card Application Directory does not exist, creating it now...");
         }
 
-        int res = hfgal_create_cad(ctx, key, should_diversify, verbose);
+        int res = hfgal_create_desfire_cad(ctx, key, should_diversify, verbose);
         PM3_RET_IF_ERR(res);
     }
 
@@ -686,7 +689,7 @@ static int hfgal_add_aid_to_cad(DesfireContext_t *ctx, uint8_t *key, bool should
     }
 
     // Select application & authenticate
-    int res = select_aid_and_auth_with_key(ctx, CAD_AID, key, 0, should_diversify, verbose);
+    int res = select_aid_and_auth_with_key(ctx, DESFIRE_CAD_AID, key, 0, should_diversify, verbose);
     PM3_RET_IF_ERR(res);
 
     // Create file if necessary
@@ -710,7 +713,7 @@ static int hfgal_add_aid_to_cad(DesfireContext_t *ctx, uint8_t *key, bool should
 
         // Create file
         res = DesfireCreateFile(ctx, file_type, data, ARRAYLEN(data), false);
-        PM3_RET_IF_ERR_WITH_MSG(res, "Failed creating file %d in CAD (AID %06X)", file_id, CAD_AID);
+        PM3_RET_IF_ERR_WITH_MSG(res, "Failed creating file %d in CAD (AID %06X)", file_id, DESFIRE_CAD_AID);
 
         if (verbose) {
             PrintAndLogEx(INFO, "Created file " _YELLOW_("%d") " in CAD (empty contents)", file_id);
@@ -722,7 +725,7 @@ static int hfgal_add_aid_to_cad(DesfireContext_t *ctx, uint8_t *key, bool should
         // Write file
         res = DesfireWriteFile(ctx, file_id, entry_num * 6, 6, entry);
     }
-    PM3_RET_IF_ERR_WITH_MSG(res, "Failed writing data to file %d in CAD AID %06X)", file_id, CAD_AID);
+    PM3_RET_IF_ERR_WITH_MSG(res, "Failed writing data to file %d in CAD AID %06X)", file_id, DESFIRE_CAD_AID);
 
     PrintAndLogEx(INFO, "Successfully added new entry for " _YELLOW_("%06X") " to the Card Application Directory", aid);
     return PM3_SUCCESS;
@@ -740,7 +743,7 @@ static int hfgal_remove_aid_from_cad(DesfireContext_t *ctx, uint8_t *key,
     // Read CAD
     uint8_t cad[36 * 3] = {0};
     uint8_t num_entries = 0;
-    int res = hfgal_read_cad(ctx, cad, ARRAYLEN(cad), &num_entries, verbose);
+    int res = hfgal_read_desfire_cad(ctx, cad, ARRAYLEN(cad), &num_entries, verbose);
     PM3_RET_IF_ERR(res);
 
     // Check if facility already exists in CAD
@@ -763,7 +766,7 @@ static int hfgal_remove_aid_from_cad(DesfireContext_t *ctx, uint8_t *key,
     memset(&cad[ARRAYLEN(cad) - 6], 0, 6);
 
     // Select application & authenticate
-    res = select_aid_and_auth_with_key(ctx, CAD_AID, key, 0, should_diversify, verbose);
+    res = select_aid_and_auth_with_key(ctx, DESFIRE_CAD_AID, key, 0, should_diversify, verbose);
     PM3_RET_IF_ERR(res);
 
     // Determine what files we need to update
@@ -774,7 +777,7 @@ static int hfgal_remove_aid_from_cad(DesfireContext_t *ctx, uint8_t *key,
     for (uint8_t file_id = file_id_start; file_id <= file_id_stop - delete_last_file; file_id++) {
         // Write file
         res = DesfireWriteFile(ctx, file_id, 0, 36, &cad[file_id * 36]);
-        PM3_RET_IF_ERR_WITH_MSG(res, "Failed writing data to file %d in CAD (AID %06X)", file_id, CAD_AID);
+        PM3_RET_IF_ERR_WITH_MSG(res, "Failed writing data to file %d in CAD (AID %06X)", file_id, DESFIRE_CAD_AID);
 
         if (verbose) {
             PrintAndLogEx(INFO, "Updated file " _YELLOW_("%d") " in CAD", file_id);
@@ -787,12 +790,12 @@ static int hfgal_remove_aid_from_cad(DesfireContext_t *ctx, uint8_t *key,
 
         DesfireSetCommMode(ctx, DCMMACed);
         res = DesfireDeleteFile(ctx, file_id);
-        PM3_RET_IF_ERR_WITH_MSG(res, "Failed deleting file %d from CAD (AID %06X)", file_id, CAD_AID);
+        PM3_RET_IF_ERR_WITH_MSG(res, "Failed deleting file %d from CAD (AID %06X)", file_id, DESFIRE_CAD_AID);
 
         if (verbose) {
             PrintAndLogEx(INFO, "Deleted unnecessary file " _YELLOW_("%d") " from CAD (AID " _YELLOW_("%06X")")",
                           file_id,
-                          CAD_AID
+                          DESFIRE_CAD_AID
                          );
         }
     }
@@ -800,6 +803,7 @@ static int hfgal_remove_aid_from_cad(DesfireContext_t *ctx, uint8_t *key,
     PrintAndLogEx(INFO, "Successfully removed " _YELLOW_("%06X") " from the Card Application Directory", aid);
     return PM3_SUCCESS;
 }
+
 
 /**
  * @brief Read credentials from a Gallagher card.
@@ -810,7 +814,7 @@ static int hfgal_remove_aid_from_cad(DesfireContext_t *ctx, uint8_t *key,
  * @param quiet Suppress error messages. Used when in continuous reader mode.
  */
 // iceman,  verbose and quiet... one should be enough.
-static int hfgal_read_card(uint32_t aid, uint8_t *site_key, bool verbose, bool quiet) {
+static int hfgal_read_desfire_card(uint32_t aid, uint8_t *site_key, bool verbose, bool quiet) {
     DropField();
     clearCommandBuffer();
 
@@ -829,7 +833,7 @@ static int hfgal_read_card(uint32_t aid, uint8_t *site_key, bool verbose, bool q
         cad_aid_uint_to_byte(aid, &cad[3]);
         num_entries = 1;
     } else {
-        res = hfgal_read_cad(&dctx, cad, ARRAYLEN(cad), &num_entries, verbose);
+        res = hfgal_read_desfire_cad(&dctx, cad, ARRAYLEN(cad), &num_entries, verbose);
         PM3_RET_IF_ERR_MAYBE_MSG(res, !quiet, "Failed reading Card Application Directory");
     }
 
@@ -861,28 +865,153 @@ static int hfgal_read_card(uint32_t aid, uint8_t *site_key, bool verbose, bool q
         }
         PM3_RET_IF_ERR_MAYBE_MSG(res, !quiet, "Failed reading card application credentials");
 
-        PrintAndLogEx(SUCCESS, "Gallagher (AID %06X) - region: " _GREEN_("%c") " ( " _GREEN_("%u") " )"
-                      ", facility: " _GREEN_("%u")
-                      ", card number: " _GREEN_("%u")
-                      ", issue level: " _GREEN_("%u"),
-                      current_aid,
-                      'A' + creds.region_code,
-                      creds.region_code,
-                      creds.facility_code,
-                      creds.card_number,
-                      creds.issue_level
-                     );
+        PrintAndLogEx(SUCCESS, "Gallagher (AID %06X) - region", current_aid);
+        print_gallagher_creds(&creds);
     }
     return PM3_SUCCESS;
+}
+
+
+/**
+ * @brief Create a new Gallagher card.
+ *
+ * @param site_key MIFARE site key.
+ * @param creds Gallagher cardholder credentials.
+ */
+static int hfgal_write_site_specific_sector(uint8_t sector_num, uint8_t *sector, GallagherCredentials_t *creds, bool verbose) {
+    uint8_t *block0 = &sector[0];
+    uint8_t *block1 = &sector[16];
+    uint8_t *block2 = &sector[32];
+    uint8_t *block3 = &sector[48];
+    uint8_t default_block3[16] = {0x16, 0x0A, 0x91, 0xD2, 0x9A, 0x9C, // KEY A
+                                  0x78, 0x77, 0x88, // ACCESS BITS
+                                  0xC1, //USER BYTE
+                                  0xB7, 0xBF, 0x0C, 0x13, 0x06, 0x6E // KEY B
+                                 };
+    uint8_t default_block2[16] = {0};
+
+    gallagher_encode_creds(block0, creds);
+    // the last 8 bytes of block0 are the bitwise inverse of the first 8 bytes
+    for (int i = 0; i < 8; i++) {
+        block0[i + 8] = block0[i] ^ 0xFF;
+    }
+    memccpy(block1, "www.cardax.com  ", 0, 16);
+    memcpy(block2, default_block2, 16);
+    memcpy(block3, default_block3, 16);
+
+    if (creds->mes) {
+        block3[9] = 0x1D;
+        gallagher_encode_mes(block2, creds);
+    }
+    clearCommandBuffer();
+    mfWriteSector()
+    return PM3_SUCCESS;
+}
+
+static int hfgal_read_site_specific_sector(uint8_t sector_num, GallagherCredentials_t cred, uint8_t *csn, uint8_t *deversified_site_key, bool verbose) {
+    uint8_t keyA[16] = {0x16, 0x0A, 0x91, 0xD2, 0x9A, 0x9C};
+    // uint8_t keyB[16] = {0xB7,0xBF,0x0C,0x13,0x06,0x6E};
+    uint8_t cardax_string[16] = {0x77, 0x77, 0x77, 0x2E, 0x63, 0x61, 0x72, 0x64, 0x61, 0x78, 0x2E, 0x63, 0x6F, 0x6D, 0x20, 0x20};
+    uint8_t data[4 * 16] = {0};
+    uint8_t *block0 = &data[0];
+    uint8_t *block1 = &data[16];
+    uint8_t *block2 = &data[32];
+    uint8_t *block3 = &data[48];
+
+    GallagherCredentials_t MES_cred = {0};
+    int res = mfReadSector(sector_num * 4, 0, keyA, data);
+
+    if (res != PM3_SUCCESS) {
+        return res;
+    }
+
+    // check if block1 is an ascii string containing "www.cardax.com  "
+    if (memcmp(block1, cardax_string, 16) != 0) {
+        if (verbose) {
+            PrintAndLogEx(FAILED, "Sector %d does not contain a Gallagher Site Key block", sector_num);
+        }
+        return PM3_ENODATA;
+    }
+
+    gallagher_decode_creds(block0, &cred);
+    if (verbose) {
+        print_gallagher_creds(&cred);
+    }
+
+    if (block3[9] == 0x1D) {
+        if (verbose) {
+            PrintAndLogEx(INFO, "Sector %d contains a MIFARE Enhanced Security block", sector_num);
+        }
+        if (csn != NULL && deversified_site_key != NULL) {
+            gallagher_decode_mes(block2, &MES_cred);
+            if (cred.card_number == MES_cred.card_number &&
+            cred.facility_code == MES_cred.facility_code &&
+            cred.issue_level == MES_cred.issue_level &&
+            cred.region_code == MES_cred.region_code) {
+                PrintAndLogEx(INFO, "MIFARE Enhanced Security block matches Site Specific block\nSite Key is correct");
+            }
+        } else {
+            PrintAndLogEx(INFO, "No Site Key or CSN provided, cannot verify MIFARE Enhanced Security block");
+        }
+    } else {
+        PrintAndLogEx(INFO, "Sector %d does not contain a MIFARE Enhanced Security block", sector_num);
+    }
+    return PM3_SUCCESS;
+}
+
+static int hfgal_read_classic_card(uint8_t *site_key, bool verbose, bool quiet) {
+    DropField();
+    clearCommandBuffer();
+    GallagherCredentials_t creds = {0};
+
+    // Select card
+    SendCommandMIX(CMD_HF_ISO14443A_READER, ISO14A_CONNECT, 0, 0, NULL, 0);
+    PacketResponseNG resp;
+    if (WaitForResponseTimeout(CMD_ACK, &resp, 2500) == false) {
+        PrintAndLogEx(DEBUG, "iso14443a card select timeout");
+        return 0;
+    }
+
+    iso14a_card_select_t card;
+    memcpy(&card, (iso14a_card_select_t *)resp.data.asBytes, sizeof(iso14a_card_select_t));
+
+    /*
+        0: couldn't read
+        1: OK, with ATS
+        2: OK, no ATS
+        3: proprietary Anticollision
+    */
+    uint64_t select_status = resp.oldarg[0];
+
+    if (select_status == 0) {
+        PrintAndLogEx(DEBUG, "iso14443a card select failed");
+        return select_status;
+    }
+
+    // card.uid, card.uidlen
+
+    // Read MAD
+
+    // Read CAD
+
+    // Check credential count
+
+    // Read credentials
+    for (uint8_t i = 0; i < MIFARE_1K_MAXSECTOR; i++) {
+        hfgal_read_site_specific_sector(i, creds, card.uid, site_key, true);
+    }
+    return PM3_ENOTIMPL;
 }
 
 static int CmdGallagherReader(const char *cmd) {
     CLIParserContext *ctx;
     CLIParserInit(&ctx, "hf gallagher reader",
-                  "Read a Gallagher DESFire tag from the Card Application Directory, CAD\n"
+                  "Read a Gallagher tag from the Card Application Directory, CAD\n"
                   "Specify site key is required if using non-default key\n",
-                  "hf gallagher reader -@ -> continuous reader mode\n"
+                  "hf gallagher reader -@ -> continuous mifare desfire reader mode\n"
+                  "hf gallagher reader -c -@ -> continuous mifare classic reader mode\n"
                   "hf gallagher reader --aid 2081f4 --sitekey 00112233445566778899aabbccddeeff -> skip CAD\n"
+                  ""
                  );
 
     void *argtable[] = {
@@ -892,6 +1021,7 @@ static int CmdGallagherReader(const char *cmd) {
         arg_lit0("@",  "continuous",          "Continuous reader mode"),
         arg_lit0(NULL, "apdu",                "Show APDU requests and responses"),
         arg_lit0("v",  "verbose",             "Verbose output"),
+        arg_lit0("c", "classic",              "Read Gallagher mifare Classic card"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, cmd, argtable, true);
@@ -917,17 +1047,30 @@ static int CmdGallagherReader(const char *cmd) {
     bool continuous_mode = arg_get_lit(ctx, 3);
     SetAPDULogging(arg_get_lit(ctx, 4));
     bool verbose = arg_get_lit(ctx, 5);
+    bool read_classic_card = arg_get_lit(ctx, 6);
     CLIParserFree(ctx);
 
     if (continuous_mode == false) {
         // Read single card
-        return hfgal_read_card(aid, site_key, verbose, false);
+        if (read_classic_card) {
+            // Read classic card
+            return hfgal_read_classic_card(site_key, verbose, false);
+        } else {
+            // Read DESFire card
+            return hfgal_read_desfire_card(aid, site_key, verbose, false);
+        }
     }
 
     // Loop until <Enter> is pressed
     PrintAndLogEx(INFO, "Press " _GREEN_("<Enter>") " to exit");
     while (kbd_enter_pressed() == false) {
-        hfgal_read_card(aid, site_key, verbose, !verbose);
+        if (read_classic_card) {
+            // Read classic card
+            return hfgal_read_classic_card(site_key, verbose, !verbose);
+        } else {
+            // Read DESFire card
+            return hfgal_read_desfire_card(aid, site_key, verbose, !verbose);
+        }
     }
     return PM3_SUCCESS;
 }
@@ -1238,7 +1381,7 @@ static int CmdGallagherDiversify(const char *cmd) {
 
     // Diversify key
     uint8_t key[CRYPTO_AES128_KEY_SIZE] = {0};
-    int res = hfgal_diversify_key(site_key, uid, uid_len, key_num, aid, key);
+    int res = hfgal_diversify_desfire_key(site_key, uid, uid_len, key_num, aid, key);
     PM3_RET_IF_ERR_WITH_MSG(res, "Failed diversifying key");
 
     char *key_str = sprint_hex_inrow(key, ARRAYLEN(key));
@@ -1357,15 +1500,35 @@ static int CmdGallagherEncode(const char *cmd) {
     return PM3_SUCCESS;
 }
 
+static int CmdGallagherTest(const char *cmd) {
+    CLIParserContext *ctx;
+    CLIParserInit(&ctx, "hf gallagher test",
+                  "Test the function of Gallagher Mifare Core\n"
+                  "",
+                  "hf gallagher test"
+                 );
+
+    void *argtable[] = {
+        arg_param_begin,
+        arg_param_end
+    };
+    CLIExecWithReturn(ctx, cmd, argtable, true);
+    CLIParserFree(ctx);
+
+
+    return (GallagherTest(false) ? PM3_SUCCESS : PM3_EFAILED);
+}
+
 
 static command_t CommandTable[] = {
     {"help",         CmdHelp,               AlwaysAvailable, "This help"},
-    {"reader",       CmdGallagherReader,    IfPm3Iso14443,   "Read & decode all Gallagher credentials on a DESFire card"},
+    {"reader",       CmdGallagherReader,    IfPm3Iso14443,   "Read & decode all Gallagher credentials on a DESFire or Classic card"},
     {"clone",        CmdGallagherClone,     IfPm3Iso14443,   "Add Gallagher credentials to a DESFire card"},
     {"delete",       CmdGallagherDelete,    IfPm3Iso14443,   "Delete Gallagher credentials from a DESFire card"},
     {"diversifykey", CmdGallagherDiversify, AlwaysAvailable, "Diversify Gallagher key"},
     {"decode",       CmdGallagherDecode,    AlwaysAvailable, "Decode Gallagher credential block"},
     {"encode",       CmdGallagherEncode,    AlwaysAvailable, "Encode Gallagher credential block"},
+    {"test",         CmdGallagherTest,      AlwaysAvailable, "Test the function of Gallagher Mifare Core"},
     {NULL, NULL, NULL, NULL}
 };
 

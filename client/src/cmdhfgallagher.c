@@ -20,6 +20,7 @@
 #include "cmdhfgallagher.h"
 #include "generator.h"
 #include "mifare.h"
+#include "mifare/mifare4.h"
 #include "mifare/desfirecore.h"
 #include "mifare/mifarehost.h"
 #include "mifare/gallaghercore.h"
@@ -878,53 +879,38 @@ static int hfgal_read_desfire_card(uint32_t aid, uint8_t *site_key, bool verbose
  * @param site_key MIFARE site key.
  * @param creds Gallagher cardholder credentials.
  */
-static int hfgal_write_site_specific_sector(uint8_t sector_num, uint8_t *sector, GallagherCredentials_t *creds, bool verbose) {
-    uint8_t *block0 = &sector[0];
-    uint8_t *block1 = &sector[16];
-    uint8_t *block2 = &sector[32];
-    uint8_t *block3 = &sector[48];
-    uint8_t default_block3[16] = {0x16, 0x0A, 0x91, 0xD2, 0x9A, 0x9C, // KEY A
-                                  0x78, 0x77, 0x88, // ACCESS BITS
-                                  0xC1, //USER BYTE
-                                  0xB7, 0xBF, 0x0C, 0x13, 0x06, 0x6E // KEY B
-                                 };
-    uint8_t default_block2[16] = {0};
+// static int hfgal_write_site_specific_sector(uint8_t sector_num, uint8_t *sector, GallagherCredentials_t *creds, bool verbose) {
+//     uint8_t *sector;
+    
+//     sector = malloc(MFBLOCK_SIZE * mfNumBlocksPerSector(sector_num));
 
-    gallagher_encode_creds(block0, creds);
-    // the last 8 bytes of block0 are the bitwise inverse of the first 8 bytes
-    for (int i = 0; i < 8; i++) {
-        block0[i + 8] = block0[i] ^ 0xFF;
-    }
-    memccpy(block1, "www.cardax.com  ", 0, 16);
-    memcpy(block2, default_block2, 16);
-    memcpy(block3, default_block3, 16);
-
-    if (creds->mes) {
-        block3[9] = 0x1D;
-        gallagher_encode_mes(block2, creds);
-    }
-    clearCommandBuffer();
-    mfWriteSector()
-    return PM3_SUCCESS;
-}
+//     gallagher_construct_site_specific_sector(sector_num, );
+//     clearCommandBuffer();
+//     mf_write_sector(sector_num, MF_KEY_A, );
+//     return PM3_SUCCESS;
+// }
 
 static int hfgal_read_site_specific_sector(uint8_t sector_num, GallagherCredentials_t cred, uint8_t *csn, uint8_t *deversified_site_key, bool verbose) {
     uint8_t keyA[16] = {0x16, 0x0A, 0x91, 0xD2, 0x9A, 0x9C};
     // uint8_t keyB[16] = {0xB7,0xBF,0x0C,0x13,0x06,0x6E};
+    
+    
     uint8_t cardax_string[16] = {0x77, 0x77, 0x77, 0x2E, 0x63, 0x61, 0x72, 0x64, 0x61, 0x78, 0x2E, 0x63, 0x6F, 0x6D, 0x20, 0x20};
-    uint8_t data[4 * 16] = {0};
+    uint8_t data[4 * MFBLOCK_SIZE] = {0};
     uint8_t *block0 = &data[0];
     uint8_t *block1 = &data[16];
     uint8_t *block2 = &data[32];
     uint8_t *block3 = &data[48];
 
-    GallagherCredentials_t MES_cred = {0};
-    int res = mfReadSector(sector_num * 4, 0, keyA, data);
+    if (mfNumBlocksPerSector(sector_num) > 4){
+        return PM3_ENOTIMPL;
+    }
 
+    GallagherCredentials_t MES_cred = {0};
+    int res = mf_read_sector(sector_num * 4, 0, keyA, data);
     if (res != PM3_SUCCESS) {
         return res;
     }
-
     // check if block1 is an ascii string containing "www.cardax.com  "
     if (memcmp(block1, cardax_string, 16) != 0) {
         if (verbose) {

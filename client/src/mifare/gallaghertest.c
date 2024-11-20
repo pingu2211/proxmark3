@@ -6,8 +6,33 @@
 
 #include "mifare/gallaghercore.h"
 
+static bool test_CAD(void) {
+    uint8_t cad[] = {0x1B, 0x58, 0x00, 0x01, 0xC1, 0x33, 0x70, 0xFD, 0x13, 0x38, 0x0D, 0x00, 0x00, 0x00, 0x00, 0x00,
+                     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x78, 0x77, 0x88, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+                     };
+    uint8_t example_rc_1 = 0xC;
+    uint16_t example_fc_1 = 0x1337;
+    uint8_t example_sector_1 = 0x0F;
+    uint8_t example_rc_2 = 0xD;
+    uint16_t example_fc_2 = 0x1338;
+    uint8_t example_sector_2 = 0x0D;
 
-static bool TestCreds() {
+    int result_1 = gallagher_read_cad(cad, example_rc_1, example_fc_1);
+    if (result_1 != example_sector_1) {
+        PrintAndLogEx(INFO, "Gallagher CAD test failed");
+        return false;
+    }
+    
+    if (gallagher_read_cad(cad, example_rc_2, example_fc_2) != example_sector_1) {
+        PrintAndLogEx(INFO, "Gallagher CAD test failed");
+        return false;
+    }
+
+    return true;
+}
+static bool test_creds(void) {
     GallagherCredentials_t creds1 = {
         .region_code = 0x0,
         .facility_code = 0x0,
@@ -46,7 +71,7 @@ static bool creds_match(GallagherCredentials_t *creds1, GallagherCredentials_t *
     return creds1->region_code == creds2->region_code && creds1->facility_code == creds2->facility_code && creds1->card_number == creds2->card_number && creds1->issue_level == creds2->issue_level;
 }
 
-static bool TestMES() {
+static bool test_MES(void) {
 
     uint8_t csn[] = {0x3C, 0x54, 0x51, 0xE3};
     uint8_t csn_len = 4;
@@ -89,7 +114,7 @@ static bool TestMES() {
 
 bool GallagherTest(bool verbose) {
     bool result = true;
-    result &= TestMES();
-    result &= TestCreds();
+    result &= test_MES();
+    result &= test_creds();
     return result;
 }

@@ -89,6 +89,34 @@ int gallagher_construct_credentail(GallagherCredentials_t *creds, uint8_t region
     return PM3_SUCCESS;
 }
 
+int gallagher_read_cad(uint8_t *cad, uint8_t region, uint16_t facility) {
+    // validate headder
+
+    // read mapping
+    // start at byte 5 of cad, read 3.5 bytes, with the 4 bits being the region code, the next 2 bytes being the facility code, and the last byte being the sector number. 
+    // this patternn repeats 12 times. (ie 0x2A bytes). Return the sector number of the first matching region and facility code. if no match is found return -1
+    uint8_t region_code;
+    uint16_t facility_code;
+    uint8_t sector_number;
+    for (int i = 0; i < 12; i++) {
+        if (i%2 == 0){
+            region_code = (cad[4 + i * 3] & 0xF0) >> 4;
+            facility_code = (cad[4 + i * 3] & 0x0F) << 12 | (cad[5 + i * 3] << 4) | (cad[5 + i * 3] << 4);
+
+            sector_number = cad[6 + i * 3];
+        } else {
+            region_code = (cad[4 + i * 3] & 0x0F);
+            facility_code = (cad[4 + i * 3]) << 8 | cad[6 + i * 3];
+            sector_number = cad[6 + i * 3];
+        }
+        if (region_code == region && facility_code == facility) {
+            return sector_number;
+        }
+    }
+    return -1;
+}
+
+
 void gallagher_decode_creds(uint8_t *eight_bytes, GallagherCredentials_t *creds) {
     uint8_t *arr = eight_bytes;
 
